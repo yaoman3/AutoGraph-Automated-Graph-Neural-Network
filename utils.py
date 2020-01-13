@@ -2,6 +2,7 @@ import ast
 import random
 import time
 import sys
+import os
 import numpy as np
 import pickle as pkl
 import torch.nn.functional as F
@@ -11,6 +12,8 @@ import scipy.sparse as sp
 import torch
 from torch_geometric.utils import dense_to_sparse
 from torch_geometric.data import Data
+from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
+from math import log
 
 
 def load_candidates(filepath):
@@ -39,10 +42,12 @@ def get_arch_key(architecture):
 
 def save_history(history):
     time_str = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-    history_file = open('log/history_{}'.format(time_str))
-    for i, individul in enumerate(history):
-        history_file.write('{}\t{}\t{}'.format(i, get_arch_key(individul.arch), individul.accuracy))
-    history_file.close()
+    file_name = 'log/history_{}.log'.format(time_str)
+    if not os.path.exists(os.path.dirname(file_name)):
+        os.makedirs(os.path.dirname(file_name))
+    with open(file_name, 'w') as f:
+        for i, individul in enumerate(history):
+            f.write('{}\t{}\t{}\t{}\n'.format(i, get_arch_key(individul.arch), individul.accuracy, str(individul.params)))
 
 def eval_model(model, data, key, binary=False):
     model.eval()
@@ -65,28 +70,69 @@ def eval_model(model, data, key, binary=False):
 
     return {'loss': loss.item(), 'accuracy': acc}
 
-def train_architecture(candidate, data, epochs=1000, early_stop=50, device='cuda'):
+def objective(space):
+    data = space['data']
+    device = space['device']
+    epochs = space['epochs']
+    candidate = space['candidate']
+    early_stop = space['early_stop']
+    try:
+        np.random.seed(space['seed'])
+        torch.cuda.manual_seed(space['seed'])
+        data = data.to(device)
+        model = candidate.build_gnn(data.num_features, data.y.max().item()+1)
+        model = model.to(device)
+        act = partial(F.log_softmax, dim=1)
+        criterion = F.nll_loss
+        optimizer = torch.optim.Adam(model.parameters(), lr=space['lr'], weight_decay=space['weight_decay'])
+        val_losses = list()
+        for epoch in range(1, epochs+1):
+            model.train()
+            optimizer.zero_grad()
+            output = model(data.x, data.edge_index, data.edge_attr).squeeze()
+            loss = criterion(act(output)[data.index_dict['train']], data.y[data.index_dict['train']])
+            loss.backward()
+            optimizer.step()
+            val_res = eval_model(model, data, 'val')
+            val_losses.append(val_res["loss"])
+            # print('Epoch: {}, Loss: {}, Acc: {}'.format(epoch, val_res['loss'], val_res['accuracy']))
+            if early_stop and epoch > early_stop and val_losses[-1] > np.mean(val_losses[-early_stop+1:-1]):
+                break
+    except Exception as e:
+        # print(e)
+        val_res = {'accuracy': 0.0}
+    return {'loss': -val_res['accuracy'], 'status': STATUS_OK}
+
+
+def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, early_stop=50):
+    cuda_id = 0
+    if cuda_dict is not None:
+        if lock is not None:
+            lock.acquire()
+        for k in cuda_dict.keys():
+            if not cuda_dict[k]:
+                cuda_id = k
+                break
+        cuda_dict[cuda_id] = True
+        if lock is not None:
+            lock.release()
+    device = 'cuda:' + str(cuda_id)
     start = time.perf_counter()
-    data = data.to(device)
-    model = candidate.build_gnn(data.num_features, data.y.max().item()+1)
-    model = model.to(device)
-    act = partial(F.log_softmax, dim=1)
-    criterion = F.nll_loss
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.1, weight_decay=1e-6)
-    val_losses = list()
-    for epoch in range(1, epochs+1):
-        model.train()
-        optimizer.zero_grad()
-        output = model(data.x, data.edge_index, data.edge_attr).squeeze()
-        loss = criterion(act(output)[data.index_dict['train']], data.y[data.index_dict['train']])
-        loss.backward()
-        optimizer.step()
-        val_res = eval_model(model, data, 'val')
-        val_losses.append(val_res["loss"])
-        if early_stop and epoch > early_stop and val_losses[-1] > np.mean(val_losses[-early_stop+1:-1]):
-            break
+    trials = Trials()
+    space = {'data': data, 'seed': 123, 'epochs': epochs, 'early_stop': early_stop, \
+        'device': device, 'candidate': candidate, \
+        'lr': 0.1, 'weight_decay': hp.loguniform('weight_decay', log(1e-7), log(1e-2))}
+    best = fmin(objective, space=space, algo=tpe.suggest, max_evals=20, trials=trials)
     train_time = time.perf_counter()-start
-    return val_res['accuracy'], model, train_time
+    best_accuracy = -min(trials.losses())
+    # print(best)
+    if cuda_dict is not None:
+        if lock is not None:
+            lock.acquire()
+        cuda_dict[cuda_id] = False
+        if lock is not None:
+            lock.release()
+    return best_accuracy, train_time, {'weight_decay': best['weight_decay']}
 
 def normalize_adj(adj):
     """Symmetrically normalize adjacency matrix."""
@@ -186,11 +232,12 @@ def get_data(dataset, device):
     data.index_dict = index_dict
     return data, adj_dense.size()[1], nclass
 
-def mutate_arch(individul, p=0.1, state_num=5):
+def mutate_arch(individul, p=0.2, state_num=5):
     arch = individul.arch.copy()
     search_space = individul.search_space
     assert len(arch) % state_num == 0
     layers = len(arch) // state_num
+    nclass = arch[-1]
     for i in range(layers):
         for k in range(state_num):
             if random.random() < p:
@@ -205,5 +252,6 @@ def mutate_arch(individul, p=0.1, state_num=5):
                 elif k == 4:
                     key = "hidden_units"
                 arch[i*state_num + k] = random.choice(search_space[key])
+    arch[-1] = nclass
     return arch
         

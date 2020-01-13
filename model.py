@@ -91,9 +91,9 @@ class GeoLayer(MessagePassing):
         edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
         # prepare
         x = torch.mm(x, self.weight).view(-1, self.heads, self.out_channels)
-        return self.propagate(edge_index, x=x, num_nodes=x.size(0))
+        return self.propagate(edge_index, x=x, num_nodes=x.size(0), edge_weight=edge_weight)
 
-    def message(self, x_i, x_j, edge_index, num_nodes):
+    def message(self, x_i, x_j, edge_index, num_nodes, edge_weight = None):
 
         if self.att_type == "const":
             if self.training and self.dropout > 0:
@@ -101,7 +101,7 @@ class GeoLayer(MessagePassing):
             neighbor = x_j
         elif self.att_type == "gcn":
             if self.gcn_weight is None or self.gcn_weight.size(0) != x_j.size(0):  # 对于不同的图gcn_weight需要重新计算
-                _, norm = self.norm(edge_index, num_nodes, None)
+                _, norm = self.norm(edge_index, num_nodes, edge_weight)
                 self.gcn_weight = norm
             neighbor = self.gcn_weight.view(-1, 1, 1) * x_j
         else:
@@ -252,9 +252,10 @@ class Individual:
         self.nclass = nclass
         self.accuracy = None
         self.model = None
-        self.trained_model = None
+        self.params = None
 
     def build_gnn(self, nfeat=None, nclass=None):
+        # torch.cuda.manual_seed(123)
         if nfeat is None:
             nfeat = self.nfeat
         if nclass is None:
