@@ -125,7 +125,7 @@ def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, 
         trials = Trials()
         space = {'data': data, 'seed': 123, 'epochs': epochs, 'early_stop': early_stop, \
             'device': device, 'candidate': candidate, \
-            'lr': hp.uniform('lr', 0.1, 0.001), 'weight_decay': hp.loguniform('weight_decay', log(1e-7), log(1e-2))}
+            'lr': hp.uniform('lr', 0.001, 0.1), 'weight_decay': hp.loguniform('weight_decay', log(1e-7), log(1e-2))}
         best = fmin(objective, space=space, algo=tpe.suggest, max_evals=60, trials=trials)
         train_time = time.perf_counter()-start
         best_accuracy = -min(trials.losses())
