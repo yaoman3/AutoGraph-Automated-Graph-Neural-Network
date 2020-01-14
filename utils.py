@@ -120,6 +120,7 @@ def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, 
             cuda_dict[cuda_id] = True
             lock.release()
     try:
+        best_accuracy = 0
         device = 'cuda:' + str(cuda_id)
         start = time.perf_counter()
         trials = Trials()
