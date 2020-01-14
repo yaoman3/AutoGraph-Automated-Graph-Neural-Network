@@ -120,7 +120,6 @@ def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, 
             cuda_dict[cuda_id] = True
             lock.release()
     try:
-        best_accuracy = 0
         device = 'cuda:' + str(cuda_id)
         start = time.perf_counter()
         trials = Trials()
@@ -133,6 +132,9 @@ def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, 
         # print(best)
     except Exception as e:
         print(str(e))
+        best_accuracy = 0
+        train_time = 0
+        best = {'lr': 0, 'weight_decay': 0}
     if cuda_dict is not None:
         if lock is not None:
             lock.acquire()
