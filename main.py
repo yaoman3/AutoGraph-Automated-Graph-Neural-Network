@@ -23,9 +23,9 @@ def register_default_args(parser):
     parser.add_argument('--random_seed', type=int, default=123)
     parser.add_argument("--cuda", type=bool, default=True, required=False,
                         help="run in cuda mode")
-    parser.add_argument('--evolution_size', type=int, default=1000)
-    parser.add_argument('--population_size', type=int, default=50)
-    parser.add_argument('--sample_size', type=int, default=8)
+    parser.add_argument('--evolution_size', type=int, default=150)
+    parser.add_argument('--population_size', type=int, default=15)
+    parser.add_argument('--sample_size', type=int, default=5)
     parser.add_argument('--init_candidates', type=str, default="")
     parser.add_argument('--search_space', type=str, default="MacroSearchSpace")
     parser.add_argument('--search_layers', type=int, default=2)
@@ -55,13 +55,12 @@ def main(args):
     torch.manual_seed(args.random_seed)
     if args.cuda:
         torch.cuda.manual_seed(args.random_seed)
-    device = 'cuda' if args.cuda else 'cpu'
     random.seed(args.random_seed)
 
     if args.search_space == "MacroSearchSpace":
         search_space = MacroSearchSpace().get_search_space()
 
-    data, nfeat, nclass = utils.get_data(args.dataset, device)
+    data, nfeat, nclass = utils.load_data(args.dataset, 'cpu')
 
     population = collections.deque()
     if args.init_candidates:
@@ -81,7 +80,7 @@ def main(args):
     mp.set_start_method('spawn')
     pool = mp.Pool(args.num_processes, maxtasksperchild=1)
     manager = mp.Manager()
-    lock = mp.Lock()
+    lock = manager.Lock()
     cuda_dict = manager.dict()
     for i in range(args.num_processes):
         cuda_dict[i] = False
@@ -90,8 +89,7 @@ def main(args):
         arch_str = utils.get_arch_key(candidate.arch)
         if arch_str not in model_dict:
             result = pool.apply_async(utils.train_architecture, (candidate, data, cuda_dict, lock))
-            cuda_id += 1
-            cuda_id = cuda_id % args.num_processes
+            model_dict[arch_str] = candidate
             # try:
             #     candidate.accuracy, candidate.train_time = utils.train_architecture(candidate, data)
             # except:
@@ -105,20 +103,23 @@ def main(args):
             # candidate.accuracy = model_dict[arch_str].accuracy
             # candidate.train_time = model_dict[arch_str].train_time
         results.append(result)
+    generation_num = 0
+    candidate_num = 0
     for candidate, result in zip(population, results):
         arch_str = utils.get_arch_key(candidate.arch)
         if isinstance(result, Individual):
             candidate.accuracy = result.accuracy
             candidate.train_time = result.train_time
-            print("Architecture: {}\tAccuracy: {}\tCurrent Best: {}".format(arch_str, candidate.accuracy, best_accuracy))
+            candidate.params = result.params
         else:
             result.wait()
             candidate.accuracy, candidate.train_time, candidate.params = result.get()
-            model_dict[arch_str] = candidate
             if candidate.accuracy>best_accuracy:
                 best_accuracy = candidate.accuracy
-            print("Architecture: {}\tAccuracy: {}\tCurrent Best: {}".format(arch_str, candidate.accuracy, best_accuracy))
+        print("ID: {}\tArchitecture: {}\tAccuracy: {}\tCurrent Best: {}".format(candidate_num, arch_str, candidate.accuracy, best_accuracy))
+        candidate_num += 1
         history.append(candidate)
+    history_file = utils.save_history(history)
 
     while len(history)<args.evolution_size:
         childs = []
@@ -131,29 +132,35 @@ def main(args):
             arch_str = utils.get_arch_key(child.arch)
             if arch_str not in model_dict:
                 result = pool.apply_async(utils.train_architecture, (child, data, cuda_dict, lock))
-                cuda_id += 1
-                cuda_id = cuda_id % args.num_processes
                 model_dict[arch_str] = child
             else:
                 result = model_dict[arch_str]
             childs.append(child)
             results.append(result)
         for child, result in zip(childs, results):
+            arch_str = utils.get_arch_key(child.arch)
             if isinstance(result, Individual):
                 child.accuracy = result.accuracy
                 child.train_time = result.train_time
+                child.params = result.params
             else:
-                result.wait()
+                try:
+                    result.wait(3600)
+                except:
+                    print("Timeout for :{}".format(arch_str))
+                    continue
                 child.accuracy, child.train_time, child.params = result.get()
                 if child.accuracy>best_accuracy:
                     best_accuracy = child.accuracy
-            print("Architecture: {}\tAccuracy: {}\tCurrent Best: {}".format(arch_str, child.accuracy, best_accuracy))
+            print("ID: {}\tArchitecture: {}\tAccuracy: {}\tCurrent Best: {}".format(candidate_num, arch_str, child.accuracy, best_accuracy))
+            candidate_num += 1
             population.append(child)
             history.append(child)
             population.popleft()
+        generation_num += 1
+        utils.save_history(history[-args.population_size:], history_file, generation_num)
 
-    utils.save_history(history)
-
+    history_file.close()
     best_model = max(history, key=lambda i: i.accuracy)
     print("Best Architectures: {}\nBest Accuracy: {}".format(best_model.arch, best_model.accuracy))
 

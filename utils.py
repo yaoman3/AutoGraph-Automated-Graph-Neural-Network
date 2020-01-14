@@ -12,6 +12,7 @@ import scipy.sparse as sp
 import torch
 from torch_geometric.utils import dense_to_sparse
 from torch_geometric.data import Data
+from torch_geometric.datasets import Planetoid
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from math import log
 
@@ -40,14 +41,17 @@ def generate_candidate(search_space, layers, nclass=None):
 def get_arch_key(architecture):
     return '[' + ','.join(str(e) for e in architecture) + ']'
 
-def save_history(history):
-    time_str = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-    file_name = 'log/history_{}.log'.format(time_str)
-    if not os.path.exists(os.path.dirname(file_name)):
-        os.makedirs(os.path.dirname(file_name))
-    with open(file_name, 'w') as f:
-        for i, individul in enumerate(history):
-            f.write('{}\t{}\t{}\t{}\n'.format(i, get_arch_key(individul.arch), individul.accuracy, str(individul.params)))
+def save_history(history, history_file = None, generation_num=0):
+    if history_file is None:
+        time_str = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+        file_name = 'log/history_{}.log'.format(time_str)
+        if not os.path.exists(os.path.dirname(file_name)):
+            os.makedirs(os.path.dirname(file_name))
+        history_file = open(file_name, 'w')
+    for i, individul in enumerate(history):
+        history_file.write('{}\t{}\t{}\t{}\t{}\n'.format(generation_num, i, get_arch_key(individul.arch), individul.accuracy, str(individul.params)))
+    history_file.flush()
+    return history_file
 
 def eval_model(model, data, key, binary=False):
     model.eval()
@@ -109,28 +113,29 @@ def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, 
     if cuda_dict is not None:
         if lock is not None:
             lock.acquire()
-        for k in cuda_dict.keys():
-            if not cuda_dict[k]:
-                cuda_id = k
-                break
-        cuda_dict[cuda_id] = True
-        if lock is not None:
+            for k in cuda_dict.keys():
+                if not cuda_dict[k]:
+                    cuda_id = k
+                    break
+            cuda_dict[cuda_id] = True
             lock.release()
-    device = 'cuda:' + str(cuda_id)
-    start = time.perf_counter()
-    trials = Trials()
-    space = {'data': data, 'seed': 123, 'epochs': epochs, 'early_stop': early_stop, \
-        'device': device, 'candidate': candidate, \
-        'lr': 0.1, 'weight_decay': hp.loguniform('weight_decay', log(1e-7), log(1e-2))}
-    best = fmin(objective, space=space, algo=tpe.suggest, max_evals=20, trials=trials)
-    train_time = time.perf_counter()-start
-    best_accuracy = -min(trials.losses())
-    # print(best)
+    try:
+        device = 'cuda:' + str(cuda_id)
+        start = time.perf_counter()
+        trials = Trials()
+        space = {'data': data, 'seed': 123, 'epochs': epochs, 'early_stop': early_stop, \
+            'device': device, 'candidate': candidate, \
+            'lr': 0.1, 'weight_decay': hp.loguniform('weight_decay', log(1e-7), log(1e-2))}
+        best = fmin(objective, space=space, algo=tpe.suggest, max_evals=20, trials=trials)
+        train_time = time.perf_counter()-start
+        best_accuracy = -min(trials.losses())
+        # print(best)
+    except Exception as e:
+        print(str(e))
     if cuda_dict is not None:
         if lock is not None:
             lock.acquire()
-        cuda_dict[cuda_id] = False
-        if lock is not None:
+            cuda_dict[cuda_id] = False
             lock.release()
     return best_accuracy, train_time, {'weight_decay': best['weight_decay']}
 
@@ -231,6 +236,17 @@ def get_data(dataset, device):
     data = Data(x=adj_dense.contiguous(), edge_index=edge_index, edge_attr=edge_attr, y=label)
     data.index_dict = index_dict
     return data, adj_dense.size()[1], nclass
+
+def load_data(dataset_str, device='cpu'):
+    if dataset_str in ['20NG', 'R8', 'R52', 'Ohsumed', 'MR']:
+        return get_data(dataset_str, device)
+    elif dataset_str in ['Cora', 'Citeseer', 'Pubmed']:
+        dataset = Planetoid(root='data/{}'.format(dataset_str), name=dataset_str)
+        data = dataset[0]
+        nfeat = dataset.num_node_features
+        nclass = dataset.num_classes
+        data.index_dict = {'train': data.train_mask, 'val': data.val_mask, 'test': data.test_mask}
+        return data, nfeat, nclass
 
 def mutate_arch(individul, p=0.2, state_num=5):
     arch = individul.arch.copy()
