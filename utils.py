@@ -70,7 +70,7 @@ def eval_model(model, data, key, binary=False):
         else:
             predict_class = act(output).gt(0.5).float()
         correct = torch.eq(predict_class[data.index_dict[key]], data.y[data.index_dict[key]]).long().sum().item()
-        acc = correct/len(data.index_dict[key])
+        acc = correct/len(data.y[data.index_dict[key]])
 
     return {'loss': loss.item(), 'accuracy': acc}
 
