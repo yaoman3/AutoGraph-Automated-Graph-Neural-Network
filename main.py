@@ -23,9 +23,9 @@ def register_default_args(parser):
     parser.add_argument('--random_seed', type=int, default=123)
     parser.add_argument("--cuda", type=bool, default=True, required=False,
                         help="run in cuda mode")
-    parser.add_argument('--evolution_size', type=int, default=8)
-    parser.add_argument('--population_size', type=int, default=4)
-    parser.add_argument('--sample_size', type=int, default=2)
+    parser.add_argument('--evolution_size', type=int, default=2000)
+    parser.add_argument('--population_size', type=int, default=100)
+    parser.add_argument('--sample_size', type=int, default=10)
     parser.add_argument('--init_candidates', type=str, default="")
     parser.add_argument('--search_space', type=str, default="MacroSearchSpace")
     parser.add_argument('--search_layers', type=int, default=3)
@@ -92,8 +92,8 @@ def main(args):
     for candidate in population:
         arch_str = utils.get_arch_key(candidate.arch)
         if arch_str not in model_dict:
-            utils.train_architecture(candidate, data, cuda_dict, lock)
-            # result = pool.apply_async(utils.train_architecture, (candidate, data, cuda_dict, lock))
+            # utils.train_architecture(candidate, data, cuda_dict, lock)
+            result = pool.apply_async(utils.train_architecture, (candidate, data, cuda_dict, lock))
             model_dict[arch_str] = candidate
             # try:
             #     candidate.accuracy, candidate.train_time = utils.train_architecture(candidate, data)

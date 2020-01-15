@@ -81,31 +81,31 @@ def objective(space):
     epochs = space['epochs']
     candidate = space['candidate']
     early_stop = space['early_stop']
-    # try:
-    np.random.seed(space['seed'])
-    torch.cuda.manual_seed(space['seed'])
-    data = data.to(device)
-    model = candidate.build_gnn(data.num_features, data.y.max().item()+1)
-    model = model.to(device)
-    act = partial(F.log_softmax, dim=1)
-    criterion = F.nll_loss
-    optimizer = torch.optim.Adam(model.parameters(), lr=space['lr'], weight_decay=space['weight_decay'])
-    val_losses = list()
-    for epoch in range(1, epochs+1):
-        model.train()
-        optimizer.zero_grad()
-        output = model(data.x, data.edge_index, data.edge_attr).squeeze()
-        loss = criterion(act(output)[data.index_dict['train']], data.y[data.index_dict['train']])
-        loss.backward()
-        optimizer.step()
-        val_res = eval_model(model, data, 'val')
-        val_losses.append(val_res["loss"])
-        # print('Epoch: {}, Loss: {}, Acc: {}'.format(epoch, val_res['loss'], val_res['accuracy']))
-        if early_stop and epoch > early_stop and val_losses[-1] > np.mean(val_losses[-early_stop+1:-1]):
-            break
-    # except Exception as e:
-    #     print(e)
-    #     val_res = {'accuracy': 0.0}
+    try:
+        np.random.seed(space['seed'])
+        torch.cuda.manual_seed(space['seed'])
+        data = data.to(device)
+        model = candidate.build_gnn(data.num_features, data.y.max().item()+1)
+        model = model.to(device)
+        act = partial(F.log_softmax, dim=1)
+        criterion = F.nll_loss
+        optimizer = torch.optim.Adam(model.parameters(), lr=space['lr'], weight_decay=space['weight_decay'])
+        val_losses = list()
+        for epoch in range(1, epochs+1):
+            model.train()
+            optimizer.zero_grad()
+            output = model(data.x, data.edge_index, data.edge_attr).squeeze()
+            loss = criterion(act(output)[data.index_dict['train']], data.y[data.index_dict['train']])
+            loss.backward()
+            optimizer.step()
+            val_res = eval_model(model, data, 'val')
+            val_losses.append(val_res["loss"])
+            # print('Epoch: {}, Loss: {}, Acc: {}'.format(epoch, val_res['loss'], val_res['accuracy']))
+            if early_stop and epoch > early_stop and val_losses[-1] > np.mean(val_losses[-early_stop+1:-1]):
+                break
+    except Exception as e:
+        print(e)
+        val_res = {'accuracy': 0.0}
     return {'loss': -val_res['accuracy'], 'status': STATUS_OK}
 
 
@@ -120,22 +120,22 @@ def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, 
                     break
             cuda_dict[cuda_id] = True
             lock.release()
-    # try:
-    device = 'cuda:' + str(cuda_id)
-    start = time.perf_counter()
-    trials = Trials()
-    space = {'data': data, 'seed': 123, 'epochs': epochs, 'early_stop': early_stop, \
-        'device': device, 'candidate': candidate, \
-        'lr': hp.uniform('lr', 0.001, 0.1), 'weight_decay': hp.loguniform('weight_decay', log(1e-7), log(1e-2))}
-    best = fmin(objective, space=space, algo=tpe.suggest, max_evals=max_evals, trials=trials)
-    train_time = time.perf_counter()-start
-    best_accuracy = -min(trials.losses())
+    try:
+        device = 'cuda:' + str(cuda_id)
+        start = time.perf_counter()
+        trials = Trials()
+        space = {'data': data, 'seed': 123, 'epochs': epochs, 'early_stop': early_stop, \
+            'device': device, 'candidate': candidate, \
+            'lr': hp.uniform('lr', 0.001, 0.1), 'weight_decay': hp.loguniform('weight_decay', log(1e-7), log(1e-2))}
+        best = fmin(objective, space=space, algo=tpe.suggest, max_evals=max_evals, trials=trials)
+        train_time = time.perf_counter()-start
+        best_accuracy = -min(trials.losses())
         # print(best)
-    # except Exception as e:
-    #     print(str(e))
-    #     best_accuracy = 0
-    #     train_time = 0
-    #     best = {'lr': 0, 'weight_decay': 0}
+    except Exception as e:
+        print(str(e))
+        best_accuracy = 0
+        train_time = 0
+        best = {'lr': 0, 'weight_decay': 0}
     if cuda_dict is not None:
         if lock is not None:
             lock.acquire()
