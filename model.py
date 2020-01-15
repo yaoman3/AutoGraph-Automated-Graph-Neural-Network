@@ -233,7 +233,7 @@ class GraphNet(nn.Module):
             act = arch[i*state_num + 2]
             head_num = arch[i*state_num + 3]
             out_channels = arch[i*state_num + 4]
-            outs.append(out_channels)
+            outs.append(out_channels * head_num)
             concat = True
             if i == nlayer-1:
                 concat = False
