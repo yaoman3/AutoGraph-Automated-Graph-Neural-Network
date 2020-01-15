@@ -23,9 +23,9 @@ def register_default_args(parser):
     parser.add_argument('--random_seed', type=int, default=123)
     parser.add_argument("--cuda", type=bool, default=True, required=False,
                         help="run in cuda mode")
-    parser.add_argument('--evolution_size', type=int, default=150)
-    parser.add_argument('--population_size', type=int, default=15)
-    parser.add_argument('--sample_size', type=int, default=5)
+    parser.add_argument('--evolution_size', type=int, default=8)
+    parser.add_argument('--population_size', type=int, default=4)
+    parser.add_argument('--sample_size', type=int, default=2)
     parser.add_argument('--init_candidates', type=str, default="")
     parser.add_argument('--search_space', type=str, default="MacroSearchSpace")
     parser.add_argument('--search_layers', type=int, default=2)
@@ -35,6 +35,10 @@ def register_default_args(parser):
                         help="The input dataset.")
     parser.add_argument("--epochs", type=int, default=1000,
                         help="number of training epochs")
+    parser.add_argument("--early_stop", type=int, default=60,
+                        help="early stop epochs")
+    parser.add_argument("--max_evals", type=int, default=60,
+                        help="hyperopt evaluation number")
     parser.add_argument("--multi_label", type=bool, default=False,
                         help="multi_label or single_label task")
     parser.add_argument("--residual", action="store_false",
@@ -88,6 +92,7 @@ def main(args):
     for candidate in population:
         arch_str = utils.get_arch_key(candidate.arch)
         if arch_str not in model_dict:
+            # utils.train_architecture(candidate, data, cuda_dict, lock)
             result = pool.apply_async(utils.train_architecture, (candidate, data, cuda_dict, lock))
             model_dict[arch_str] = candidate
             # try:
@@ -131,7 +136,7 @@ def main(args):
             child.arch = utils.mutate_arch(parent)
             arch_str = utils.get_arch_key(child.arch)
             if arch_str not in model_dict:
-                result = pool.apply_async(utils.train_architecture, (child, data, cuda_dict, lock))
+                result = pool.apply_async(utils.train_architecture, (child, data, cuda_dict, lock, args.epochs, args.early_stop, args.max_evals))
                 model_dict[arch_str] = child
             else:
                 result = model_dict[arch_str]

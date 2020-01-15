@@ -28,14 +28,15 @@ def load_candidates(filepath):
 
 def generate_candidate(search_space, layers, nclass=None):
     arch = list()
-    for _ in range(layers):
+    for i in range(layers):
         arch.append(random.choice(search_space['attention_type']))
         arch.append(random.choice(search_space['aggregator_type']))
         arch.append(random.choice(search_space['activate_function']))
         arch.append(random.choice(search_space['number_of_heads']))
         arch.append(random.choice(search_space['hidden_units']))
+        arch.append(random.choice(search_space['skip_connection'][:i+1]))
     if nclass is not None:
-        arch[-1] = nclass
+        arch[-2] = nclass
     return arch
 
 def get_arch_key(architecture):
@@ -103,12 +104,12 @@ def objective(space):
             if early_stop and epoch > early_stop and val_losses[-1] > np.mean(val_losses[-early_stop+1:-1]):
                 break
     except Exception as e:
-        # print(e)
+        print(e)
         val_res = {'accuracy': 0.0}
     return {'loss': -val_res['accuracy'], 'status': STATUS_OK}
 
 
-def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, early_stop=50):
+def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, early_stop=50, max_evals=60):
     cuda_id = 0
     if cuda_dict is not None:
         if lock is not None:
@@ -126,7 +127,7 @@ def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, 
         space = {'data': data, 'seed': 123, 'epochs': epochs, 'early_stop': early_stop, \
             'device': device, 'candidate': candidate, \
             'lr': hp.uniform('lr', 0.001, 0.1), 'weight_decay': hp.loguniform('weight_decay', log(1e-7), log(1e-2))}
-        best = fmin(objective, space=space, algo=tpe.suggest, max_evals=60, trials=trials)
+        best = fmin(objective, space=space, algo=tpe.suggest, max_evals=max_evals, trials=trials)
         train_time = time.perf_counter()-start
         best_accuracy = -min(trials.losses())
         # print(best)
@@ -251,12 +252,12 @@ def load_data(dataset_str, device='cpu'):
         data.index_dict = {'train': data.train_mask, 'val': data.val_mask, 'test': data.test_mask}
         return data, nfeat, nclass
 
-def mutate_arch(individul, p=0.2, state_num=5):
+def mutate_arch(individul, p=0.2, state_num=6):
     arch = individul.arch.copy()
     search_space = individul.search_space
     assert len(arch) % state_num == 0
     layers = len(arch) // state_num
-    nclass = arch[-1]
+    nclass = arch[-2]
     for i in range(layers):
         for k in range(state_num):
             if random.random() < p:
@@ -270,7 +271,12 @@ def mutate_arch(individul, p=0.2, state_num=5):
                     key = "number_of_heads"
                 elif k == 4:
                     key = "hidden_units"
-                arch[i*state_num + k] = random.choice(search_space[key])
-    arch[-1] = nclass
+                elif k == 5:
+                    key = "skip_connection"
+                choices = search_space[key]
+                if k == 5:
+                    choices = choices[:i+1]
+                arch[i*state_num + k] = random.choice(choices)
+    arch[-2] = nclass
     return arch
         

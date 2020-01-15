@@ -207,27 +207,33 @@ class GeoLayer(MessagePassing):
 
 
 class GraphNet(nn.Module):
-    def __init__(self, arch, nfeat, nclass, dropout=0.5, state_num=5):
+    def __init__(self, arch, nfeat, nclass, dropout=0.5, state_num=6):
         super().__init__()
         self.dropout = dropout
         self.layers = nn.ModuleList()
         self.acts = []
+        self.skip = []
         self.build_layers(arch, nfeat, nclass, state_num)
 
-    def build_layers(self, arch, nfeat, nclass, state_num=5):
+    def build_layers(self, arch, nfeat, nclass, state_num=6):
         assert len(arch) % state_num == 0
-        assert arch[-1] == nclass
+        assert arch[-2] == nclass
         nlayer = len(arch) // state_num
+        outs = [nfeat]
         for i in range(nlayer):
             if i == 0:
                 in_channels = nfeat
             else:
                 in_channels = out_channels * head_num
+            self.skip.append(arch[i*state_num + 5])
+            if self.skip[-1] != -1:
+                in_channels += outs[self.skip[-1]]
             attention_type = arch[i*state_num + 0]
             aggregator_type = arch[i*state_num + 1]
             act = arch[i*state_num + 2]
             head_num = arch[i*state_num + 3]
             out_channels = arch[i*state_num + 4]
+            outs.append(out_channels)
             concat = True
             if i == nlayer-1:
                 concat = False
@@ -236,11 +242,17 @@ class GraphNet(nn.Module):
             self.acts.append(act_map(act))
 
     def forward(self, x, edge_index, edge_weight=None):
+        outputs = []
         output = x
+        outputs.append(x)
         for i, (act, layer) in enumerate(zip(self.acts, self.layers)):
+            if self.skip[i] != -1:
+                output = torch.cat((output, outputs[self.skip[i]]), 1)
             if i != 0:
                 output = F.dropout(output, p=self.dropout, training=self.training)
-            output = act(layer(output, edge_index, edge_weight))
+            output = layer(output, edge_index, edge_weight)
+            output = act(output)
+            outputs.append(output)
         return output
 
 
