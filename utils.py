@@ -75,6 +75,16 @@ def eval_model(model, data, key, binary=False):
 
     return {'loss': loss.item(), 'accuracy': acc}
 
+def eval_architecture(candidate, data, nfeat, nclass, lr, weight_decay, device='cuda'):
+    data = data.to(device)
+    model = candidate.build_gnn(data.num_features, data.y.max().item()+1)
+    model = model.to(device)
+    act = partial(F.log_softmax, dim=1)
+    criterion = F.nll_loss
+    optimizer = torch.optim.Adam(model.parameters(), lr=space['lr'], weight_decay=space['weight_decay'])
+    val_losses = list()
+
+
 def objective(space):
     data = space['data']
     device = space['device']
@@ -244,7 +254,7 @@ def get_data(dataset, device):
 def load_data(dataset_str, device='cpu'):
     if dataset_str in ['20NG', 'R8', 'R52', 'Ohsumed', 'MR']:
         return get_data(dataset_str, device)
-    elif dataset_str in ['Cora', 'Citeseer', 'Pubmed']:
+    elif dataset_str in ['Cora', 'CiteSeer', 'PubMed']:
         dataset = Planetoid(root='data/{}'.format(dataset_str), name=dataset_str)
         data = dataset[0]
         nfeat = dataset.num_node_features
