@@ -31,6 +31,7 @@ def register_default_args(parser):
     parser.add_argument('--search_space', type=str, default="MacroSearchSpace")
     parser.add_argument('--search_layers', type=int, default=3)
     parser.add_argument('--num_processes', type=int, default=4)
+    parser.add_argument('--update_batch', type=int, default=12)
     # child model
     parser.add_argument("--dataset", type=str, default="R8", required=False,
                         help="The input dataset.")
@@ -48,7 +49,7 @@ def register_default_args(parser):
                         help="learning rate")
     parser.add_argument('--weight_decay', type=float, default=1e-6)
     parser.add_argument('--test_structure', type=str, default="")
-
+    parser.add_argument('--model_dict', type=str, default="")
 
 
 def main(args): 
@@ -67,7 +68,7 @@ def main(args):
     if args.mode == 'test':
         candidate = Individual(search_space, nfeat=nfeat, nclass=nclass)
         candidate.arch = ast.literal_eval(args.test_structure)
-        utils.eval_architecture(data, nfeat, nclass, candidate, args.lr, args.weight_decay)
+        utils.eval_architecture(candidate, data, nfeat, nclass, args.lr, args.weight_decay, args.epochs, args.early_stop, args.model_dict)
     else:
         population = collections.deque()
         if args.init_candidates:
@@ -84,6 +85,7 @@ def main(args):
         history = list()
         model_dict = dict()
         best_accuracy = 0.0
+        # best_model = None
         mp.set_start_method('spawn')
         pool = mp.Pool(args.num_processes, maxtasksperchild=1)
         manager = mp.Manager()
@@ -95,8 +97,8 @@ def main(args):
         for candidate in population:
             arch_str = utils.get_arch_key(candidate.arch)
             if arch_str not in model_dict:
-                # utils.train_architecture(candidate, data, cuda_dict, lock)
-                result = pool.apply_async(utils.train_architecture, (candidate, data, cuda_dict, lock))
+                # utils.train_architecture(candidate, data, cuda_dict, lock, args.epochs, args.early_stop, args.max_evals)
+                result = pool.apply_async(utils.train_architecture, (candidate, data, cuda_dict, lock, args.epochs, args.early_stop, args.max_evals))
                 model_dict[arch_str] = candidate
                 # try:
                 #     candidate.accuracy, candidate.train_time = utils.train_architecture(candidate, data)
@@ -124,6 +126,7 @@ def main(args):
                 candidate.accuracy, candidate.train_time, candidate.params = result.get()
                 if candidate.accuracy>best_accuracy:
                     best_accuracy = candidate.accuracy
+                    # best_model = model_params_dict
             print("ID: {}\tArchitecture: {}\tAccuracy: {}\tCurrent Best: {}".format(candidate_num, arch_str, candidate.accuracy, best_accuracy))
             candidate_num += 1
             history.append(candidate)
@@ -132,7 +135,7 @@ def main(args):
         while len(history)<args.evolution_size:
             childs = []
             results = []
-            for _ in range(args.population_size):
+            for _ in range(args.update_batch):
                 sample = random.choices(list(population), k = args.sample_size)
                 parent = max(sample, key=lambda i: i.accuracy)
                 child = Individual(search_space, nfeat=nfeat, nclass=nclass)
@@ -160,6 +163,7 @@ def main(args):
                     child.accuracy, child.train_time, child.params = result.get()
                     if child.accuracy>best_accuracy:
                         best_accuracy = child.accuracy
+                        # best_model = model_params_dict
                 print("ID: {}\tArchitecture: {}\tAccuracy: {}\tCurrent Best: {}".format(candidate_num, arch_str, child.accuracy, best_accuracy))
                 candidate_num += 1
                 population.append(child)
@@ -168,9 +172,10 @@ def main(args):
             generation_num += 1
             utils.save_history(history[-args.population_size:], history_file, generation_num)
 
+        # utils.save_model(best_model, history_file)
         history_file.close()
-        best_model = max(history, key=lambda i: i.accuracy)
-        print("Best Architectures: {}\nBest Accuracy: {}".format(best_model.arch, best_model.accuracy))
+        best_individual = max(history, key=lambda i: i.accuracy)
+        print("Best Architectures: {}\nBest Accuracy: {}".format(best_individual.arch, best_individual.accuracy))
 
 
 if __name__ == "__main__":

@@ -264,6 +264,7 @@ class Individual:
         self.nclass = nclass
         self.accuracy = None
         self.model = None
+        self.best_model_dict = None
         self.params = None
 
     def build_gnn(self, nfeat=None, nclass=None):
