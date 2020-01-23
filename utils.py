@@ -89,7 +89,7 @@ def eval_architecture(candidate, data, nfeat, nclass, lr, weight_decay, epochs=1
     data = data.to(device)
     model = candidate.build_gnn(data.num_features, data.y.max().item()+1)
     if model_dict != "":
-        model.load_state_dict(torch.load(model_dict))
+        model.load_state_dict(torch.load(model_dict, map_location=torch.device(device)))
         model = model.to(device)
     else:
         model = model.to(device)
