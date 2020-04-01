@@ -161,7 +161,7 @@ def objective(space):
     return {'loss': -best_val, 'model': best_model, 'status': STATUS_OK}
 
 
-def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, early_stop=50, max_evals=60):
+def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, early_stop=50, max_evals=60, lr=0.01, weight_decay=1e-6, hyperopt=True):
     cuda_id = 0
     if cuda_dict is not None:
         if lock is not None:
@@ -175,16 +175,22 @@ def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, 
     try:
         device = 'cuda:' + str(cuda_id)
         start = time.perf_counter()
-        trials = Trials()
-        space = {'data': data, 'seed': 123, 'epochs': epochs, 'early_stop': early_stop, \
-            'device': device, 'candidate': candidate, \
-            'lr': hp.loguniform('lr', log(1e-5), log(1e-1)), 'weight_decay': hp.loguniform('weight_decay', log(1e-7), log(1e-2))}
-        best = fmin(objective, space=space, algo=tpe.suggest, max_evals=max_evals, trials=trials)
+        if hyperopt:
+            trials = Trials()
+            space = {'data': data, 'seed': 123, 'epochs': epochs, 'early_stop': early_stop, \
+                'device': device, 'candidate': candidate, \
+                'lr': hp.loguniform('lr', log(1e-5), log(1e-1)), 'weight_decay': hp.loguniform('weight_decay', log(1e-7), log(1e-2))}
+            best = fmin(objective, space=space, algo=tpe.suggest, max_evals=max_evals, trials=trials)
+            losses = np.array(trials.losses())
+            best_index = np.argmin(losses)
+            best_accuracy = -trials.losses()[best_index]
+            best_model = trials.results[best_index]['model']
+        else:
+            space = {'data': data, 'seed': 123, 'epochs': epochs, 'early_stop': early_stop, \
+                'device': device, 'candidate': candidate, \
+                'lr': lr, 'weight_decay': weight_decay}
+            best_model = objective(space)
         train_time = time.perf_counter()-start
-        losses = np.array(trials.losses())
-        best_index = np.argmin(losses)
-        best_accuracy = -trials.losses()[best_index]
-        best_model = trials.results[best_index]['model']
         save_model(best_model, candidate)
         # print(best)
     except Exception as e:

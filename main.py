@@ -98,7 +98,7 @@ def main(args):
             arch_str = utils.get_arch_key(candidate.arch)
             if arch_str not in model_dict:
                 # utils.train_architecture(candidate, data, cuda_dict, lock, args.epochs, args.early_stop, args.max_evals)
-                result = pool.apply_async(utils.train_architecture, (candidate, data, cuda_dict, lock, args.epochs, args.early_stop, args.max_evals))
+                result = pool.apply_async(utils.train_architecture, (candidate, data, cuda_dict, lock, args.epochs, args.early_stop, args.max_evals, args.lr, args.weight_decay, args.hyperopt))
                 model_dict[arch_str] = candidate
                 # try:
                 #     candidate.accuracy, candidate.train_time = utils.train_architecture(candidate, data)
