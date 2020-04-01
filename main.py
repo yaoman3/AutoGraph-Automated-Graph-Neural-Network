@@ -142,7 +142,7 @@ def main(args):
                 child.arch = utils.mutate_arch(parent)
                 arch_str = utils.get_arch_key(child.arch)
                 if arch_str not in model_dict:
-                    result = pool.apply_async(utils.train_architecture, (child, data, cuda_dict, lock, args.epochs, args.early_stop, args.max_evals))
+                    result = pool.apply_async(utils.train_architecture, (child, data, cuda_dict, lock, args.epochs, args.early_stop, args.max_evals, args.lr, args.weight_decay, args.hyperopt))
                     model_dict[arch_str] = child
                 else:
                     result = model_dict[arch_str]
