@@ -11,7 +11,7 @@ class MacroSearchSpace:
                                   "softplus", "leaky_relu", "relu6", "elu"],
             'number_of_heads': [1, 2, 4],
             'hidden_units': [16, 32, 64, 128, 256],
-            'skip_connection': [-1, 0, 1]
+            'skip_connection': [0, 1]
         }
 
     def get_search_space(self):

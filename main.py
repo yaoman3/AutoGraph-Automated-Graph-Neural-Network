@@ -1,6 +1,6 @@
 import argparse
 import time
-import torch.multiprocessing as mp
+import torch.multiprocessing as tmp
 import collections
 import random
 import torch
@@ -45,7 +45,7 @@ def register_default_args(parser):
                         help="input feature dropout")
     parser.add_argument("--hyperopt", action="store_true",
                         help="do hyperparameter search")
-    parser.add_argument("--lr", type=float, default=0.1,
+    parser.add_argument("--lr", type=float, default=0.001,
                         help="learning rate")
     parser.add_argument('--weight_decay', type=float, default=1e-6)
     parser.add_argument('--test_structure', type=str, default="")
@@ -86,7 +86,7 @@ def main(args):
         model_dict = dict()
         best_accuracy = 0.0
         # best_model = None
-        mp.set_start_method('spawn')
+        mp = tmp.get_context('spawn')
         pool = mp.Pool(args.num_processes, maxtasksperchild=1)
         manager = mp.Manager()
         lock = manager.Lock()

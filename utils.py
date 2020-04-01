@@ -16,6 +16,7 @@ from torch_geometric.data import Data
 from torch_geometric.datasets import Planetoid, PPI
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from math import log
+from torch_geometric.utils.num_nodes import maybe_num_nodes
 
 
 def load_candidates(filepath):
@@ -341,6 +342,54 @@ def mutate_arch(individul, p=0.2, state_num=6):
                 if k == 5:
                     choices = choices[:i+1]
                 arch[i*state_num + k] = random.choice(choices)
+    # TODO: Process highway connection
     arch[-2] = nclass
     return arch
-        
+
+def add_remaining_self_loops_features(edge_index, edge_features=None, fill_value=None,
+                             num_nodes=None):
+    r"""Adds remaining self-loop :math:`(i,i) \in \mathcal{E}` to every node
+    :math:`i \in \mathcal{V}` in the graph given by :attr:`edge_index`.
+    In case the graph is weighted and already contains a few self-loops, only
+    non-existent self-loops will be added with edge weights denoted by
+    :obj:`fill_value`.
+
+    Args:
+        edge_index (LongTensor): The edge indices.
+        edge_weight (Tensor, optional): One-dimensional edge weights.
+            (default: :obj:`None`)
+        fill_value (int, optional): If :obj:`edge_weight` is not :obj:`None`,
+            will add self-loops with edge weights of :obj:`fill_value` to the
+            graph. (default: :obj:`1`)
+        num_nodes (int, optional): The number of nodes, *i.e.*
+            :obj:`max_val + 1` of :attr:`edge_index`. (default: :obj:`None`)
+
+    :rtype: (:class:`LongTensor`, :class:`Tensor`)
+    """
+    num_nodes = maybe_num_nodes(edge_index, num_nodes)
+    row, col = edge_index
+
+    if fill_value is None:
+        fill_value = [1 for _ in range(edge_features.size(1))]
+
+    mask = row != col
+
+    if edge_features is not None:
+        assert edge_features.size(0) == edge_index.size(1)
+        inv_mask = ~mask
+
+        loop_features = torch.tensor(fill_value, 
+                            dtype=None if edge_features is None else edge_features.dtype, 
+                            device=edge_index.device)
+        loop_features = loop_features.unsqueeze(0)
+        loop_features = loop_features.expand(num_nodes, -1)
+        remaining_edge_features = edge_features[inv_mask]
+        if remaining_edge_features.numel() > 0:
+            loop_features[row[inv_mask]] = remaining_edge_features
+        edge_features = torch.cat([edge_features[mask], loop_features], dim=0)
+
+    loop_index = torch.arange(0, num_nodes, dtype=row.dtype, device=row.device)
+    loop_index = loop_index.unsqueeze(0).repeat(2, 1)
+    edge_index = torch.cat([edge_index[:, mask], loop_index], dim=1)
+
+    return edge_index, edge_features
