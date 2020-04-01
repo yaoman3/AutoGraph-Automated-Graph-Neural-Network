@@ -189,7 +189,10 @@ def train_architecture(candidate, data, cuda_dict=None, lock=None, epochs=1000, 
             space = {'data': data, 'seed': 123, 'epochs': epochs, 'early_stop': early_stop, \
                 'device': device, 'candidate': candidate, \
                 'lr': lr, 'weight_decay': weight_decay}
-            best_model = objective(space)
+            result = objective(space)
+            best = {'lr': lr, 'weight_decay': weight_decay}
+            best_model = result['model']
+            best_accuracy = -result['loss']
         train_time = time.perf_counter()-start
         save_model(best_model, candidate)
         # print(best)
