@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from datetime import datetime
 from functools import partial
 import scipy.sparse as sp
+import sklearn
 import torch
 from torch_geometric.utils import dense_to_sparse
 from torch_geometric.data import Data
@@ -62,7 +63,7 @@ def save_model(model, candidate):
         os.makedirs(os.path.dirname(file_name))
     torch.save(model, file_name)
 
-def eval_model(model, data, key, binary=False):
+def eval_model(model, data, key=None, binary=False):
     model.eval()
     if not binary:
         act = partial(F.log_softmax, dim=1)
@@ -73,50 +74,110 @@ def eval_model(model, data, key, binary=False):
 
     with torch.no_grad():
         output = model(data.x, data.edge_index, data.edge_attr).squeeze()
-        loss = criterion(act(output)[data.index_dict[key]], data.y[data.index_dict[key]])
+        if key is not None:
+            loss = criterion(act(output)[data.index_dict[key]], data.y[data.index_dict[key]])
+        else:
+            loss = criterion(act(output), data.y)
         if not binary:
             predict_class = output.max(1)[1]
+            correct = torch.eq(predict_class[data.index_dict[key]], data.y[data.index_dict[key]]).long().sum().item()
+            acc = correct/len(data.y[data.index_dict[key]])
         else:
             predict_class = act(output).gt(0.5).float()
-        correct = torch.eq(predict_class[data.index_dict[key]], data.y[data.index_dict[key]]).long().sum().item()
-        acc = correct/len(data.y[data.index_dict[key]])
+            # predict_class = act(output)
+            acc = sklearn.metrics.f1_score(data.y.view(-1).cpu().numpy(), predict_class.view(-1).cpu().numpy())
 
     return {'loss': loss.item(), 'accuracy': acc}
 
-def eval_architecture(candidate, data, nfeat, nclass, lr, weight_decay, epochs=1000, early_stop=50, model_dict="", device='cuda'):
-    # random.seed(123)
-    # np.random.seed(123)
-    # torch.cuda.manual_seed(123)
+
+def train_model(candidate, data, lr, weight_decay, epochs=1000, early_stop=50, model_dict="", device='cuda', seed=None):
+    # Handle PPI data
+    if isinstance(data, dict):
+        dataset = data
+        tmp = list()
+        for data in dataset['train']:
+            tmp.append(data.to(device))
+        dataset['train'] = tmp
+        tmp = list()
+        for data in dataset['val']:
+            tmp.append(data.to(device))
+        dataset['val'] = tmp
+        inductive = True
+    else:
+        inductive = False
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.cuda.manual_seed(seed)
+    if inductive:
+        data = dataset['train'][0]
+        nclass = dataset['train'][0].y.size(1)
+    else:
+        nclass = data.y.max().item()+1
     data = data.to(device)
-    model = candidate.build_gnn(data.num_features, data.y.max().item()+1)
+    model = candidate.build_gnn(data.num_features, nclass)
     if model_dict != "":
         model.load_state_dict(torch.load(model_dict, map_location=torch.device(device)))
         model = model.to(device)
+        best_model = None
+        best_val = 0
     else:
         model = model.to(device)
-        act = partial(F.log_softmax, dim=1)
-        criterion = F.nll_loss
+        if inductive:
+            act = partial(torch.softmax, dim=1)
+            criterion = F.binary_cross_entropy
+        else:
+            act = partial(F.log_softmax, dim=1)
+            criterion = F.nll_loss
         optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
         val_losses = list()
         best_model = None
         best_val = 0
         for epoch in range(1, epochs+1):
             model.train()
-            optimizer.zero_grad()
-            output = model(data.x, data.edge_index, data.edge_attr).squeeze()
-            loss = criterion(act(output)[data.index_dict['train']], data.y[data.index_dict['train']])
-            loss.backward()
-            optimizer.step()
-            val_res = eval_model(model, data, 'val')
-            val_losses.append(val_res["loss"])
+            if inductive:
+                for data in dataset['train']:
+                    optimizer.zero_grad()
+                    data = data.to(device)
+                    output = model(data.x, data.edge_index, data.edge_attr).squeeze()
+                    loss = criterion(act(output), data.y)
+                    loss.backward()
+                    optimizer.step()
+            else:
+                optimizer.zero_grad()
+                output = model(data.x, data.edge_index, data.edge_attr).squeeze()
+                loss = criterion(act(output)[data.index_dict['train']], data.y[data.index_dict['train']])
+                loss.backward()
+                optimizer.step()
+            if inductive:
+                val_res = {'loss':0.0, 'accuracy':0.0}
+                for data in dataset['val']:
+                    data = data.to(device)
+                    tmp_val = eval_model(model, data, binary=True)
+                    val_res['loss'] += tmp_val['loss']
+                    val_res['accuracy'] += tmp_val['accuracy']
+                val_res['loss'] /= len(dataset['val'])
+                val_res['accuracy'] /= len(dataset['val'])
+                val_losses.append(val_res['loss'])
+            else:
+                val_res = eval_model(model, data, 'val')
+                val_losses.append(val_res["loss"])
             if val_res['accuracy'] > best_val:
                 best_model = copy.deepcopy(model.state_dict())
                 best_val = val_res['accuracy']
             print('Epoch: {}, Loss: {}, Acc: {}'.format(epoch, val_res['loss'], val_res['accuracy']))
             if early_stop and epoch > early_stop and val_losses[-1] > np.mean(val_losses[-early_stop+1:-1]):
                 break
-        # tran_res = eval_model(model,data, 'train')
         model.load_state_dict(best_model)
+    return {'loss': best_val, 'model': best_model, 'trained_model': model}
+
+
+def eval_architecture(candidate, data, lr, weight_decay, epochs=1000, early_stop=50, model_dict="", device='cuda'):
+    # random.seed(123)
+    # np.random.seed(123)
+    # torch.cuda.manual_seed(123)
+    ret = train_model(candidate, data, lr, weight_decay, epochs, early_stop, model_dict, device)
+    model = ret['trained_model']
     val_res = eval_model(model, data, 'val')
     test_res = eval_model(model, data, 'test')
     print("Validation Accuracy: {}, Test Accuracy: {}".format(val_res['accuracy'], test_res['accuracy']))
@@ -131,31 +192,9 @@ def objective(space):
     best_model = None
     best_val = 0
     try:
-        random.seed(space['seed'])
-        np.random.seed(space['seed'])
-        torch.cuda.manual_seed(space['seed'])
-        data = data.to(device)
-        model = candidate.build_gnn(data.num_features, data.y.max().item()+1)
-        model = model.to(device)
-        act = partial(F.log_softmax, dim=1)
-        criterion = F.nll_loss
-        optimizer = torch.optim.Adam(model.parameters(), lr=space['lr'], weight_decay=space['weight_decay'])
-        val_losses = list()
-        for epoch in range(1, epochs+1):
-            model.train()
-            optimizer.zero_grad()
-            output = model(data.x, data.edge_index, data.edge_attr).squeeze()
-            loss = criterion(act(output)[data.index_dict['train']], data.y[data.index_dict['train']])
-            loss.backward()
-            optimizer.step()
-            val_res = eval_model(model, data, 'val')
-            val_losses.append(val_res["loss"])
-            if val_res['accuracy'] > best_val:
-                best_model = copy.deepcopy(model.state_dict())
-                best_val = val_res['accuracy']
-            # print('Epoch: {}, Loss: {}, Acc: {}'.format(epoch, val_res['loss'], val_res['accuracy']))
-            if early_stop and epoch > early_stop and val_losses[-1] > np.mean(val_losses[-early_stop+1:-1]):
-                break
+        ret = train_model(candidate, data, space['lr'], space['weight_decay'], epochs=epochs, early_stop=early_stop, device=device, seed=space['seed'])
+        best_val = ret['loss']
+        best_model = ret['model']
     except Exception as e:
         print(e)
     return {'loss': -best_val, 'model': best_model, 'status': STATUS_OK}
@@ -318,9 +357,9 @@ def load_data(dataset_str, device='cpu'):
         data.index_dict = {'train': data.train_mask, 'val': data.val_mask, 'test': data.test_mask}
         return data, nfeat, nclass
     elif dataset_str in ['PPI']:
-        data_train = PPI(root='data/{}'.format(dataset_str+'_train'), split='train')
-        data_val = PPI(root='data/{}'.format(dataset_str+'_val'), split='val')
-        data_test = PPI(root='data/{}'.format(dataset_str+'_test'), split='test')
+        data_train = PPI(root='data/{}'.format(dataset_str), split='train')
+        data_val = PPI(root='data/{}'.format(dataset_str), split='val')
+        data_test = PPI(root='data/{}'.format(dataset_str), split='test')
         nfeat = data_train.num_node_features
         nclass = data_train.num_classes
         dataset = {'train': data_train, 'val': data_val, 'test': data_test}

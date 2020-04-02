@@ -68,7 +68,7 @@ def main(args):
     if args.mode == 'test':
         candidate = Individual(search_space, nfeat=nfeat, nclass=nclass)
         candidate.arch = ast.literal_eval(args.test_structure)
-        utils.eval_architecture(candidate, data, nfeat, nclass, args.lr, args.weight_decay, args.epochs, args.early_stop, args.model_dict)
+        utils.eval_architecture(candidate, data, args.lr, args.weight_decay, args.epochs, args.early_stop, args.model_dict)
     else:
         population = collections.deque()
         if args.init_candidates:
