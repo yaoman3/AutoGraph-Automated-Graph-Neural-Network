@@ -53,16 +53,16 @@ class GeoLayer(MessagePassing):
         if self.att_type in ["generalized_linear"]:
             self.general_att_layer = torch.nn.Linear(out_channels, 1, bias=False)
 
-        if self.agg_type in ["mean", "max", "mlp"]:
-            if pool_dim <= 0:
-                pool_dim = 128
-        self.pool_dim = pool_dim
-        if pool_dim != 0:
-            self.pool_layer = torch.nn.ModuleList()
-            self.pool_layer.append(torch.nn.Linear(self.out_channels, self.pool_dim))
-            self.pool_layer.append(torch.nn.Linear(self.pool_dim, self.out_channels))
-        else:
-            pass
+        # if self.agg_type in ["mean", "max", "mlp"]:
+        #     if pool_dim <= 0:
+        #         pool_dim = 128
+        # self.pool_dim = pool_dim
+        # if pool_dim != 0:
+        #     self.pool_layer = torch.nn.ModuleList()
+        #     self.pool_layer.append(torch.nn.Linear(self.out_channels, self.pool_dim))
+        #     self.pool_layer.append(torch.nn.Linear(self.pool_dim, self.out_channels))
+        # else:
+        #     pass
         self.reset_parameters()
 
     @staticmethod
@@ -116,36 +116,37 @@ class GeoLayer(MessagePassing):
         if self.att_type in ["generalized_linear"]:
             glorot(self.general_att_layer.weight)
 
-        if self.pool_dim != 0:
-            for layer in self.pool_layer:
-                glorot(layer.weight)
-                zeros(layer.bias)
+        # if self.pool_dim != 0:
+        #     for layer in self.pool_layer:
+        #         glorot(layer.weight)
+        #         zeros(layer.bias)
 
     def forward(self, x, edge_index, edge_weight=None):
         """"""
-        # edge_index, _ = remove_self_loops(edge_index)
-        # edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
+        if edge_weight is None:
+            edge_index, _ = remove_self_loops(edge_index)
+            edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
 
         if self.normalize and self.att_type != "const":
             edge_index, edge_weight = self.norm(edge_index, x.size(0), edge_weight)
-        # edge_index, edge_features = self.d_norm(edge_index, x.size(0), edge_features)
+        #    edge_index, edge_features = self.d_norm(edge_index, x.size(0), edge_features)
 
         # prepare
-        x0 = x
+        # x0 = x
         x = torch.mm(x, self.weight).view(-1, self.heads, self.out_channels)
+        # x = torch.matmul(x, self.weight)
 
         out = self.propagate(edge_index, x=x, num_nodes=x.size(0), edge_weight=edge_weight)
-        if self.highway:
-            x0 = torch.mm(x0, self.trans_weight)
-            t_x = torch.sigmoid(self.linear_gate(x0))
-            out = torch.mul(out, t_x) + torch.mul(x0,(1-t_x))
+        # if self.highway:
+        #     x0 = torch.mm(x0, self.trans_weight)
+        #     t_x = torch.sigmoid(self.linear_gate(x0))
+        #     out = torch.mul(out, t_x) + torch.mul(x0,(1-t_x))
         return out
 
     def message(self, x_i, x_j, edge_index_i, num_nodes, edge_weight=None):
-
         if self.att_type == "const":
-            if self.training and self.dropout > 0:
-                x_j = F.dropout(x_j, p=self.dropout, training=True)
+            # if self.training and self.dropout > 0:
+            #     x_j = F.dropout(x_j, p=self.dropout, training=True)
             neighbor = x_j
         elif self.att_type == "gcn":
             # Multiply edge weight
@@ -158,13 +159,12 @@ class GeoLayer(MessagePassing):
             alpha = self.apply_attention(x_i, x_j, num_nodes)
             alpha = softmax(alpha, edge_index_i, num_nodes)
             # Sample attention coefficients stochastically.
-            if self.training and self.dropout > 0:
-                alpha = F.dropout(alpha, p=self.dropout, training=True)
-            neighbor = edge_weight.view(-1, 1, 1) * x_j if edge_weight is not None else x_j
-            neighbor = neighbor * alpha.view(-1, self.heads, 1)
-        if self.pool_dim > 0:
-            for layer in self.pool_layer:
-                neighbor = layer(neighbor)
+            alpha = F.dropout(alpha, p=self.dropout, training=self.training)
+            # neighbor = edge_weight.view(-1, 1, 1) * x_j if edge_weight is not None else x_j
+            neighbor = x_j * alpha.view(-1, self.heads, 1)
+        # if self.pool_dim > 0:
+        #     for layer in self.pool_layer:
+        #         neighbor = layer(neighbor)
         return neighbor
 
     def apply_attention(self, x_i, x_j, num_nodes):
@@ -259,7 +259,7 @@ class GeoLayer(MessagePassing):
 
 
 class GraphNet(nn.Module):
-    def __init__(self, arch, nfeat, nclass, dropout=0.5, state_num=6):
+    def __init__(self, arch, nfeat, nclass, dropout=0, state_num=6):
         super().__init__()
         self.dropout = dropout
         self.layers = nn.ModuleList()
@@ -271,41 +271,45 @@ class GraphNet(nn.Module):
         assert len(arch) % state_num == 0
         assert arch[-2] == nclass
         nlayer = len(arch) // state_num
-        # outs = [nfeat]
+        outs = [nfeat]
         for i in range(nlayer):
             if i == 0:
                 in_channels = nfeat
             else:
                 in_channels = out_channels * head_num
-            # self.skip.append(arch[i*state_num + 5])
-            # if self.skip[-1] != -1:
-            #     in_channels += outs[self.skip[-1]]
+            self.skip.append(arch[i*state_num + 5])
+            if self.skip[-1] != 0:
+                for k in range(i):
+                    if self.skip[-1] & (2 ** k) > 0:
+                        in_channels += outs[k]
             attention_type = arch[i*state_num + 0]
             aggregator_type = arch[i*state_num + 1]
             act = arch[i*state_num + 2]
             head_num = arch[i*state_num + 3]
             out_channels = arch[i*state_num + 4]
-            skip = bool(arch[i*state_num + 5])
-            # outs.append(out_channels * head_num)
+            # skip = bool(arch[i*state_num + 5])
+            outs.append(out_channels * head_num)
             concat = True
             if i == nlayer-1:
                 concat = False
             self.layers.append(GeoLayer(in_channels, out_channels, head_num, att_type=attention_type, agg_type=aggregator_type, \
-                concat=concat, dropout=self.dropout, highway=skip))
+                concat=concat, dropout=self.dropout))
             self.acts.append(act_map(act))
 
     def forward(self, x, edge_index, edge_weight=None):
-        # outputs = []
+        outputs = []
         output = x
-        # outputs.append(x)
+        outputs.append(x)
         for i, (act, layer) in enumerate(zip(self.acts, self.layers)):
-            # if self.skip[i] != -1:
-            #     output = torch.cat((output, outputs[self.skip[i]]), 1)
+            if self.skip[i] != 0:
+                for k in range(i):
+                    if self.skip[i] & (2 ** k) > 0:
+                        output = torch.cat((output, outputs[k]), 1)
             if i != 0:
                 output = F.dropout(output, p=self.dropout, training=self.training)
             output = layer(output, edge_index, edge_weight)
             output = act(output)
-            # outputs.append(output)
+            outputs.append(output)
         return output
 
 

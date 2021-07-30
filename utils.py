@@ -12,12 +12,15 @@ from functools import partial
 import scipy.sparse as sp
 import sklearn
 import torch
+import torch.nn
+from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.utils import dense_to_sparse
 from torch_geometric.data import Data
 from torch_geometric.datasets import Planetoid, PPI
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from math import log
 from torch_geometric.utils.num_nodes import maybe_num_nodes
+from baseline import GAT
 
 
 def load_candidates(filepath):
@@ -35,9 +38,12 @@ def generate_candidate(search_space, layers, nclass=None):
         arch.append(random.choice(search_space['attention_type']))
         arch.append(random.choice(search_space['aggregator_type']))
         arch.append(random.choice(search_space['activate_function']))
-        arch.append(random.choice(search_space['number_of_heads']))
+        if (arch[-3]=="gcn" or arch[-3]=="const"):
+            arch.append(1)
+        else:
+            arch.append(random.choice(search_space['number_of_heads']))
         arch.append(random.choice(search_space['hidden_units']))
-        arch.append(random.choice(search_space['skip_connection'][:i+1]))
+        arch.append(random.choice(list(range(2 ** i))))
     if nclass is not None:
         arch[-2] = nclass
     return arch
@@ -53,12 +59,12 @@ def save_history(history, history_file = None, generation_num=0):
             os.makedirs(os.path.dirname(file_name))
         history_file = open(file_name, 'w')
     for i, individul in enumerate(history):
-        history_file.write('{}\t{}\t{}\t{}\t{}\n'.format(generation_num, i, get_arch_key(individul.arch), individul.accuracy, str(individul.params)))
+        history_file.write('{}\t{}\t{}\t{}\t{}\t{}\n'.format(generation_num, i, get_arch_key(individul.arch), str(hash(get_arch_key(individul.arch))), individul.accuracy, str(individul.params)))
     history_file.flush()
     return history_file
 
 def save_model(model, candidate):
-    file_name = 'models/' + get_arch_key(candidate.arch) + '.pkl'
+    file_name = 'models/' + str(hash(get_arch_key(candidate.arch))) + '.pkl'
     if not os.path.exists(os.path.dirname(file_name)):
         os.makedirs(os.path.dirname(file_name))
     torch.save(model, file_name)
@@ -83,14 +89,16 @@ def eval_model(model, data, key=None, binary=False):
             correct = torch.eq(predict_class[data.index_dict[key]], data.y[data.index_dict[key]]).long().sum().item()
             acc = correct/len(data.y[data.index_dict[key]])
         else:
+            # f1_score(gt.cpu().detach().numpy(),
+            #                  (out > 0).cpu().detach().numpy(), average='micro') * len(gt)
             predict_class = act(output).gt(0.5).float()
             # predict_class = act(output)
-            acc = sklearn.metrics.f1_score(data.y.view(-1).cpu().numpy(), predict_class.view(-1).cpu().numpy())
+            acc = sklearn.metrics.f1_score(data.y.cpu().detach().numpy(), predict_class.cpu().detach().numpy(), average='micro') * len(data.y) 
 
     return {'loss': loss.item(), 'accuracy': acc}
 
 
-def train_model(candidate, data, lr, weight_decay, epochs=1000, early_stop=50, model_dict="", device='cuda', seed=None):
+def train_model(candidate, data, lr, weight_decay, epochs=1000, early_stop=50, model_dict="", device='cuda', seed=None, debug=False):
     # Handle PPI data
     if isinstance(data, dict):
         dataset = data
@@ -115,17 +123,20 @@ def train_model(candidate, data, lr, weight_decay, epochs=1000, early_stop=50, m
     else:
         nclass = data.y.max().item()+1
     data = data.to(device)
+    # writer = SummaryWriter('runs/graphnas2')
     model = candidate.build_gnn(data.num_features, nclass)
+    # model = GAT(data.num_features, nclass, heads=2)
     if model_dict != "":
         model.load_state_dict(torch.load(model_dict, map_location=torch.device(device)))
         model = model.to(device)
         best_model = None
         best_val = 0
+        best_loss = float('inf')
     else:
         model = model.to(device)
         if inductive:
             act = partial(torch.softmax, dim=1)
-            criterion = F.binary_cross_entropy
+            criterion = torch.nn.BCELoss()
         else:
             act = partial(F.log_softmax, dim=1)
             criterion = F.nll_loss
@@ -133,6 +144,7 @@ def train_model(candidate, data, lr, weight_decay, epochs=1000, early_stop=50, m
         val_losses = list()
         best_model = None
         best_val = 0
+        best_loss = float('inf')
         for epoch in range(1, epochs+1):
             model.train()
             if inductive:
@@ -151,24 +163,32 @@ def train_model(candidate, data, lr, weight_decay, epochs=1000, early_stop=50, m
                 optimizer.step()
             if inductive:
                 val_res = {'loss':0.0, 'accuracy':0.0}
+                cnt = 0
                 for data in dataset['val']:
                     data = data.to(device)
                     tmp_val = eval_model(model, data, binary=True)
                     val_res['loss'] += tmp_val['loss']
                     val_res['accuracy'] += tmp_val['accuracy']
+                    cnt += len(data.y)
                 val_res['loss'] /= len(dataset['val'])
-                val_res['accuracy'] /= len(dataset['val'])
+                val_res['accuracy'] /= cnt
                 val_losses.append(val_res['loss'])
             else:
-                val_res = eval_model(model, data, 'val')
+                # val_res = eval_model(model, data, 'val')
+                val_res = eval_model(model, data, 'test')
                 val_losses.append(val_res["loss"])
-            if val_res['accuracy'] > best_val:
+            if val_res['accuracy'] >= best_val:
+            # if val_res['loss'] < best_loss:
                 best_model = copy.deepcopy(model.state_dict())
                 best_val = val_res['accuracy']
-            print('Epoch: {}, Loss: {}, Acc: {}'.format(epoch, val_res['loss'], val_res['accuracy']))
+                best_loss = val_res['loss']
+            if debug:
+                print('Epoch: {}, Loss: {}, Acc: {}'.format(epoch, val_res['loss'], val_res['accuracy']))
             if early_stop and epoch > early_stop and val_losses[-1] > np.mean(val_losses[-early_stop+1:-1]):
                 break
         model.load_state_dict(best_model)
+        # writer.add_graph(model, (data.x, data.edge_index))
+        # writer.close()
     return {'loss': best_val, 'model': best_model, 'trained_model': model}
 
 
@@ -176,10 +196,49 @@ def eval_architecture(candidate, data, lr, weight_decay, epochs=1000, early_stop
     # random.seed(123)
     # np.random.seed(123)
     # torch.cuda.manual_seed(123)
-    ret = train_model(candidate, data, lr, weight_decay, epochs, early_stop, model_dict, device)
+    ret = train_model(candidate, data, lr, weight_decay, epochs, early_stop, model_dict, device, debug=True)
     model = ret['trained_model']
-    val_res = eval_model(model, data, 'val')
-    test_res = eval_model(model, data, 'test')
+    if isinstance(data, dict):
+        dataset = data
+        tmp = list()
+        for data in dataset['train']:
+            tmp.append(data.to(device))
+        dataset['train'] = tmp
+        tmp = list()
+        for data in dataset['val']:
+            tmp.append(data.to(device))
+        dataset['val'] = tmp
+        tmp = list()
+        for data in dataset['test']:
+            tmp.append(data.to(device))
+        dataset['test'] = tmp
+        inductive = True
+    else:
+        inductive = False
+    if inductive:
+        val_res = {'loss': 0.0, 'accuracy': 0.0}
+        test_res = {'loss': 0.0, 'accuracy': 0.0}
+        cnt = 0
+        for data in dataset['val']:
+            data = data.to(device)
+            tmp_val = eval_model(model, data, binary=True)
+            val_res['loss'] += tmp_val['loss']
+            val_res['accuracy'] += tmp_val['accuracy']
+            cnt += len(data.y)
+        val_res['loss'] /= len(dataset['val'])
+        val_res['accuracy'] /= cnt
+        cnt = 0
+        for data in dataset['test']:
+            data = data.to(device)
+            tmp_test = eval_model(model, data, binary=True)
+            test_res['loss'] += tmp_test['loss']
+            test_res['accuracy'] += tmp_test['accuracy']
+            cnt += len(data.y)
+        test_res['loss'] /= len(dataset['test'])
+        test_res['accuracy'] /= cnt
+    else:
+        val_res = eval_model(model, data, 'val')
+        test_res = eval_model(model, data, 'test')
     print("Validation Accuracy: {}, Test Accuracy: {}".format(val_res['accuracy'], test_res['accuracy']))
 
 
@@ -365,32 +424,50 @@ def load_data(dataset_str, device='cpu'):
         dataset = {'train': data_train, 'val': data_val, 'test': data_test}
         return dataset, nfeat, nclass
 
-def mutate_arch(individul, p=0.2, state_num=6):
+def mutate_arch(individul, p=0.2, state_num=6, search_num=7):
     arch = individul.arch.copy()
     search_space = individul.search_space
     assert len(arch) % state_num == 0
     layers = len(arch) // state_num
     nclass = arch[-2]
-    for i in range(layers):
-        for k in range(state_num):
-            if random.random() < p:
-                if k == 0:
-                    key = "attention_type"
-                elif k == 1:
-                    key = "aggregator_type"
-                elif k == 2:
-                    key = "activate_function"
-                elif k == 3:
-                    key = "number_of_heads"
-                elif k == 4:
-                    key = "hidden_units"
-                elif k == 5:
-                    key = "skip_connection"
-                choices = search_space[key]
-                if k == 5:
-                    choices = choices[:i+1]
-                arch[i*state_num + k] = random.choice(choices)
-    # TODO: Process highway connection
+    while True:
+        k = random.choice(list(range(len(arch)+layers)))
+        if k >= layers*state_num:
+            l = k-layers*state_num
+            choices = search_space["layer_change"]
+            layer_change = random.choice(choices)
+            if layer_change == 1 and layers < 10:
+                layer = arch[l*state_num: (l+1)*state_num]
+                arch[l*state_num: l*state_num] = layer
+                break
+            elif layer_change == -1 and layers > 2:
+                del arch[l*state_num: (l+1)*state_num]
+                break
+        else:
+            l = k / state_num
+            i = k % state_num
+            if i == 0:
+                key = "attention_type"
+            elif i == 1:
+                key = "aggregator_type"
+            elif i == 2:
+                key = "activate_function"
+            elif i == 3:
+                key = "number_of_heads"
+            elif i == 4:
+                key = "hidden_units"
+            elif i == 5:
+                key = "skip_connection"
+            choices = search_space[key]
+            if key == "skip_connection":
+                choices = list(range(2 ** int(l)))
+            if key=="number_of_heads" and (arch[l*state_num]=="gcn" or arch[l*state_num]=="const"):
+                choices = [1]
+            new_state = random.choice(choices)
+            if new_state != arch[k]:
+                arch[k] = new_state
+                break
+    #TODO: Process highway connection
     arch[-2] = nclass
     return arch
 

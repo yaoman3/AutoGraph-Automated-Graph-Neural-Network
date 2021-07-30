@@ -21,7 +21,7 @@ def register_default_args(parser):
     parser.add_argument('--mode', type=str, default='train',
                         choices=['train', 'test'],
                         help='train: Search Neural Architectures, test: Evaluate Architectures')
-    parser.add_argument('--random_seed', type=int, default=123)
+    parser.add_argument('--random_seed', type=int, default=234)
     parser.add_argument("--cuda", type=bool, default=True, required=False,
                         help="run in cuda mode")
     parser.add_argument('--evolution_size', type=int, default=2000)
@@ -33,7 +33,7 @@ def register_default_args(parser):
     parser.add_argument('--num_processes', type=int, default=4)
     parser.add_argument('--update_batch', type=int, default=12)
     # child model
-    parser.add_argument("--dataset", type=str, default="R8", required=False,
+    parser.add_argument("--dataset", type=str, default="Cora", required=False,
                         help="The input dataset.")
     parser.add_argument("--epochs", type=int, default=1000,
                         help="number of training epochs")
@@ -41,13 +41,13 @@ def register_default_args(parser):
                         help="early stop epochs")
     parser.add_argument("--max_evals", type=int, default=60,
                         help="hyperopt evaluation number")
-    parser.add_argument("--in-drop", type=float, default=0.5,
-                        help="input feature dropout")
+    # parser.add_argument("--in-drop", type=float, default=0.5,
+    #                     help="input feature dropout")
     parser.add_argument("--hyperopt", action="store_true",
                         help="do hyperparameter search")
-    parser.add_argument("--lr", type=float, default=0.001,
+    parser.add_argument("--lr", type=float, default=0.0001,
                         help="learning rate")
-    parser.add_argument('--weight_decay', type=float, default=1e-6)
+    parser.add_argument('--weight_decay', type=float, default=1e-7)
     parser.add_argument('--test_structure', type=str, default="")
     parser.add_argument('--model_dict', type=str, default="")
 
