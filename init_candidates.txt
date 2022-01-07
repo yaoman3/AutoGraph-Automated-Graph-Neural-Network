@@ -1,0 +1,1 @@
+["gat","max","tanh",2,64,-1,"generalized_linear","sum","relu6",4,256,0,"cos","sum","relu",1,7,1]
